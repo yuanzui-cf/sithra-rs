@@ -1,7 +1,13 @@
-use axum::Router;
+mod state;
+mod types;
+mod webhook;
+
+use axum::{Router, routing::post};
 use serde::{Deserialize, Serialize};
 use sithra_kit::{plugin, types::initialize::Initialize};
 use tokio::net::TcpListener;
+
+use crate::state::AppState;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Config {
@@ -18,6 +24,13 @@ struct Config {
     host:   String,
     /// Domain for webhook, if not set, will use `{host}:{port}`
     domain: Option<String>,
+    /// Secret token for webhook
+    ///
+    /// A secret token to be sent in a header “X-Telegram-Bot-Api-Secret-Token”
+    /// in every webhook request, 1-256 characters. Only characters A-Z, a-z,
+    /// 0-9, _ and - are allowed. The header is useful to ensure that the
+    /// request comes from a webhook set by you.
+    secret: Option<String>,
 }
 
 fn default_telegram_api() -> String {
@@ -29,9 +42,9 @@ fn default_host() -> String {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() {
     let (
-        plugin,
+        mut plugin,
         Initialize {
             config,
             id: plugin_id,
@@ -45,11 +58,17 @@ async fn main() -> anyhow::Result<()> {
         port,
         host,
         domain,
+        secret,
     } = config;
 
-    let app: Router = Router::new();
+    let state = AppState {
+        client: plugin.server.client(),
+        secret,
+    };
 
-    let listener = TcpListener::bind((host.as_str(), port)).await?;
+    let app: Router = Router::new().route("/webhook", post(webhook::webhook)).with_state(state);
+
+    let listener = plugin.expect(TcpListener::bind((host.as_str(), port)).await).await;
 
     let serve = axum::serve(listener, app);
 
@@ -58,6 +77,4 @@ async fn main() -> anyhow::Result<()> {
         _ = tokio::signal::ctrl_c() => {},
         _ = serve => {},
     }
-
-    Ok(())
 }
