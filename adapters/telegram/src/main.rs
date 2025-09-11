@@ -4,10 +4,8 @@ mod webhook;
 
 use axum::{Router, routing::post};
 use serde::{Deserialize, Serialize};
-use sithra_kit::{
-    plugin,
-    types::initialize::{Initialize, PluginInitError},
-};
+use serde_json::json;
+use sithra_kit::{plugin, types::initialize::Initialize};
 use tokio::net::TcpListener;
 
 use crate::{
@@ -71,29 +69,23 @@ async fn main() {
     let base_api = plugin.expect(reqwest::Url::parse(&telegram_api)).await;
     let base_api = plugin.expect(base_api.join(&format!("/bot{token}/"))).await;
 
-    let get_me = plugin.expect(base_api.join("./getMe")).await;
+    let bot = plugin.expect(get_bot_info(&req, &base_api).await).await;
 
-    let res = plugin
-        .expect(req.post(get_me.clone()).send().await)
-        .await
-        .json::<Response<User>>()
-        .await;
-    let res = plugin.expect(res).await;
-
-    if !res.ok {
-        plugin
-            .err(PluginInitError::CustomError(
-                "Failed to get bot info. Check if the token is correct.".to_owned(),
-            ))
-            .await;
-    }
+    let init_telegram_webhook_result = init_telegram_webhook(
+        &req,
+        &base_api,
+        &domain.unwrap_or_else(|| format!("http://{host}:{port}")),
+        &secret.clone().unwrap_or_default(),
+    )
+    .await;
+    plugin.expect(init_telegram_webhook_result).await;
 
     let state = AppState {
         client: plugin.server.client(),
         secret,
         req,
         base_api,
-        bot: res.result.unwrap(),
+        bot,
     };
 
     let app: Router = Router::new().route("/webhook", post(webhook::webhook)).with_state(state);
@@ -102,11 +94,61 @@ async fn main() {
 
     let serve = axum::serve(listener, app);
 
-    log::info!("Server started");
+    log::info!("Webhook server started.");
 
     tokio::select! {
         _ = plugin.run().join_all() => {},
         _ = tokio::signal::ctrl_c() => {},
         _ = serve => {},
     }
+}
+
+/// Get Telegram bot info.
+async fn get_bot_info(req: &reqwest::Client, base_api: &reqwest::Url) -> anyhow::Result<User> {
+    let get_me = base_api.join("./getMe")?;
+
+    let res = req.post(get_me.clone()).send().await?.json::<Response<User>>().await?;
+
+    if !res.ok || res.result.is_none() {
+        anyhow::bail!("Failed to get bot info. Check if the token is correct.");
+    }
+
+    Ok(res.result.unwrap())
+}
+
+/// Initialize Telegram webhook.
+async fn init_telegram_webhook(
+    req: &reqwest::Client,
+    base_api: &reqwest::Url,
+    domain: &str,
+    secret: &str,
+) -> anyhow::Result<()> {
+    let domain = if !domain.starts_with("http://") || !domain.starts_with("https://") {
+        format!("https://{domain}")
+    } else {
+        domain.to_owned()
+    };
+    let url = reqwest::Url::parse(&domain)?;
+    let url = url.join("./webhook")?;
+
+    let request_url = base_api.join("./setWebhook")?;
+    let res = req
+        .post(request_url)
+        .json(&json!({
+            "url": url.to_string(),
+            "secret_token": secret
+        }))
+        .send()
+        .await?
+        .json::<Response<bool>>()
+        .await?;
+
+    if !res.ok {
+        anyhow::bail!(
+            "Failed to set webhook: {}",
+            res.description.unwrap_or_else(|| "Unknown reason".to_owned())
+        );
+    }
+
+    Ok(())
 }
