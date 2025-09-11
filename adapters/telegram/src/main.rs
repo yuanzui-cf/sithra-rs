@@ -4,10 +4,16 @@ mod webhook;
 
 use axum::{Router, routing::post};
 use serde::{Deserialize, Serialize};
-use sithra_kit::{plugin, types::initialize::Initialize};
+use sithra_kit::{
+    plugin,
+    types::initialize::{Initialize, PluginInitError},
+};
 use tokio::net::TcpListener;
 
-use crate::state::AppState;
+use crate::{
+    state::AppState,
+    types::{Response, User},
+};
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Config {
@@ -61,9 +67,33 @@ async fn main() {
         secret,
     } = config;
 
+    let req = reqwest::Client::new();
+    let base_api = plugin.expect(reqwest::Url::parse(&telegram_api)).await;
+    let base_api = plugin.expect(base_api.join(&format!("/bot{token}/"))).await;
+
+    let get_me = plugin.expect(base_api.join("./getMe")).await;
+
+    let res = plugin
+        .expect(req.post(get_me.clone()).send().await)
+        .await
+        .json::<Response<User>>()
+        .await;
+    let res = plugin.expect(res).await;
+
+    if !res.ok {
+        plugin
+            .err(PluginInitError::CustomError(
+                "Failed to get bot info. Check if the token is correct.".to_owned(),
+            ))
+            .await;
+    }
+
     let state = AppState {
         client: plugin.server.client(),
         secret,
+        req,
+        base_api,
+        bot: res.result.unwrap(),
     };
 
     let app: Router = Router::new().route("/webhook", post(webhook::webhook)).with_state(state);
@@ -71,6 +101,8 @@ async fn main() {
     let listener = plugin.expect(TcpListener::bind((host.as_str(), port)).await).await;
 
     let serve = axum::serve(listener, app);
+
+    log::info!("Server started");
 
     tokio::select! {
         _ = plugin.run().join_all() => {},
