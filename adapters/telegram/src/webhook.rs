@@ -1,5 +1,4 @@
 use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
-use serde_json::json;
 
 use crate::{state::AppState, types::Update};
 
@@ -8,8 +7,17 @@ pub async fn webhook(
     headers: HeaderMap,
     Json(req): Json<Update>,
 ) -> impl IntoResponse {
-    log::info!("Headers: {headers:?}");
-    log::info!("Request: {:?}", req);
+    let header_secret = match headers.get("X-Telegram-Bot-Api-Secret-Token") {
+        Some(secret) => secret.as_bytes(),
+        None => b"",
+    };
 
-    Json(json!("{}"))
+    if let Some(secret) = state.secret
+        && header_secret != secret.as_bytes()
+    {
+        log::error!("Invalid secret token");
+        return;
+    }
+
+    todo!("Emit event")
 }
