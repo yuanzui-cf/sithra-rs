@@ -123,7 +123,7 @@ async fn init_telegram_webhook(
     domain: &str,
     secret: &str,
 ) -> anyhow::Result<()> {
-    let domain = if !domain.starts_with("http://") || !domain.starts_with("https://") {
+    let domain = if !domain.starts_with("http://") && !domain.starts_with("https://") {
         format!("https://{domain}")
     } else {
         domain.to_owned()
@@ -132,6 +132,7 @@ async fn init_telegram_webhook(
     let url = url.join("./webhook")?;
 
     let request_url = base_api.join("./setWebhook")?;
+
     let res = req
         .post(request_url)
         .json(&json!({
