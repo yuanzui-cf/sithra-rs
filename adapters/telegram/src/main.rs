@@ -1,3 +1,4 @@
+mod internal;
 mod state;
 mod types;
 mod webhook;
@@ -70,6 +71,8 @@ async fn main() {
     let base_api = plugin.expect(base_api.join(&format!("/bot{token}/"))).await;
 
     let bot = plugin.expect(get_bot_info(&req, &base_api).await).await;
+
+    log::info!("Bot login: {}[{}]", &bot.first_name, bot.id);
 
     let init_telegram_webhook_result = init_telegram_webhook(
         &req,
